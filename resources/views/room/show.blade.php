@@ -153,9 +153,9 @@
                     throw new Error("window.Echo is not defined. Make sure Laravel Echo is initialized.");
                 }
 
-                const currentRoom = document.getElementById("room-id-display").textContent.trim();
+                const currentRoomId = document.getElementById("room-id-display").textContent.trim();
 
-                window.Echo.channel(`room.${currentRoom}`)
+                window.Echo.channel(`room.${currentRoomId}`)
                     .listen('.code.updated', (e) => {
                         if (e.userId !== sessionUserId) {
                             console.log(
@@ -198,10 +198,10 @@
                         showNotification('Connection lost. Please refresh.', 'error');
                     });
 
-                console.log("✅ Echo successfully initialized for room:", currentRoom);
+                console.log("✅ Echo successfully initialized for room:", currentRoomId);
 
                 // Add this after the existing Echo channel listeners
-                window.Echo.channel(`room.${currentRoom}`)
+                window.Echo.channel(`room.${currentRoomId}`)
                     .listen('.room.inactive', (e) => {
                         console.log('Room is now inactive');
 
@@ -226,7 +226,7 @@
                                         <a href="/" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition">
                                             <i class="fas fa-home mr-2"></i> Go to Home
                                         </a>
-                                        <a href="/room/${currentRoom}" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition">
+                                        <a href="/room/${currentRoomId}" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition">
                                             <i class="fas fa-redo mr-2"></i> Reactivate Room
                                         </a>
                                     </div>
@@ -236,7 +236,7 @@
 
                         // Redirect after 10 seconds if user doesn't take action
                         setTimeout(() => {
-                            window.location.href = `/room/${currentRoom}`;
+                            window.location.href = `/room/${currentRoomId}`;
                         }, 10000);
                     });
 
@@ -290,7 +290,7 @@
         let typingTimer;
         let codeUpdateTimer;
         const sessionUserId = '{{ $userId }}';
-        const currentRoom = document.getElementById("room-id-display")?.textContent.trim() || '';
+        const currentRoomId = document.getElementById("room-id-display")?.textContent.trim() || '';
 
         // Update line and character count
         function updateStats() {
@@ -330,14 +330,14 @@
 
         // Add this to your JavaScript
         function checkRoomStatus() {
-            fetch(`/room/${currentRoom}/status`)
+            fetch(`/room/${currentRoomId}/status`)
                 .then(response => response.json())
                 .then(data => {
                     if (!data.is_active) {
                         // Trigger the same handling as the WebSocket event
                         const event = new CustomEvent('room-inactive', {
                             detail: {
-                                roomId: currentRoom
+                                roomId: currentRoomId
                             }
                         });
                         document.dispatchEvent(event);

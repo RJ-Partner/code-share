@@ -6,7 +6,7 @@ export default defineConfig({
         host: '0.0.0.0', // 👈 Accept connections from any IP
         port: 5173,      // 👈 Default Vite dev port
         hmr: {
-            host: '192.168.20.69', // 👈 Your LAN IP here
+            host: '10.132.213.254', // 👈 Your LAN IP here
             protocol: 'ws',        // 👈 WebSocket for HMR
         },
     },

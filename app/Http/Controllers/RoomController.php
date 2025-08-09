@@ -15,8 +15,7 @@ class RoomController extends Controller
     // Cache keys
     private const ACTIVE_USERS_CACHE_PREFIX = 'room_active_users_';
     private const USER_SESSION_PREFIX = 'room_user_session_';
-    // Cache duration (15 minutes)
-    private const CACHE_DURATION = 900;
+    private const CACHE_DURATION = 43200; // 12 hours in seconds
 
     public function create()
     {
@@ -32,12 +31,14 @@ class RoomController extends Controller
         ]);
 
         $readOnly = $request->read_only == 'on' ? true : false;
+
         $room = Room::create([
             'name' => $validated['name'],
             'room_id' => $validated['room_id'],
             'password' => $validated['password'] ? bcrypt($validated['password']) : null,
             'is_public' => empty($validated['password']),
             'read_only' => $readOnly,
+            'expired_at' => now()->addSeconds(self::CACHE_DURATION),
             'code' => '// Welcome to DevSync!',
         ]);
 
@@ -207,7 +208,7 @@ class RoomController extends Controller
         // Broadcast activity
         broadcast(new UserActivity($roomId, $activeUsers, 'update'));
 
-        $this->removeInactiveUsers();
+        $this->removeInactiveUsers($roomId);
 
         return response()->json([
             'success' => true,
@@ -327,7 +328,6 @@ class RoomController extends Controller
                     'ip' => $userInfo['ip'] ?? null,
                     'user_agent' => $userInfo['userAgent'] ?? null,
                     'is_admin' => $userInfo['isAdmin'] ?? false,
-                    'last_activity' => now(),
                     'updated_at' => now(),
                 ]
             );
@@ -348,58 +348,36 @@ class RoomController extends Controller
 
             Log::info("User Deleted: {$userId} in room {$roomId}");
 
-            // Delete from DB using Eloquent
-            RoomUser::where('room_id', $roomId)->where('user_id', $userId)->delete();
+            // // Delete from DB using Eloquent
+            // RoomUser::where('room_id', $roomId)->where('user_id', $userId)->delete();
 
-            // If no active users left in DB, mark room as inactive
-            $remainingUsers = RoomUser::where('room_id', $roomId)->count();
-            if ($remainingUsers === 0) {
-                Room::where('room_id', $roomId)->update(['is_active' => false]);
-                broadcast(new RoomInactive($roomId));
-            }
+            // // If no active users left in DB, mark room as inactive
+            // $remainingUsers = RoomUser::where('room_id', $roomId)->count();
+            // if ($remainingUsers === 0) {
+            //     Room::where('room_id', $roomId)->update(['is_active' => false]);
+            //     broadcast(new RoomInactive($roomId));
+            // }
         }
 
         return $activeUsers;
     }
 
-    private function removeInactiveUsers(): void
+    private function removeInactiveUsers($roomId): void
     {
-        $expired = now()->subSeconds(self::CACHE_DURATION);
+        $inactiveRoom = Room::where('room_id', $roomId)
+            ->where('expired_at', '<', now())
+            ->first();
 
-        // Get expired users using Eloquent
-        $expiredUsers = RoomUser::where('last_activity', '<', $expired)->get();
+        if ($inactiveRoom) {
+            // Step 1: Room ke saare users delete
+            RoomUser::where('room_id', $inactiveRoom->room_id)->delete();
 
-        // Group by room_id to check room activity after removal
-        $affectedRooms = [];
+            // Step 2: Room inactive mark karo
+            $inactiveRoom->is_active = false;
+            $inactiveRoom->save();
 
-        foreach ($expiredUsers as $user) {
-            // Remove from cache
-            $cacheKey = self::ACTIVE_USERS_CACHE_PREFIX . $user->room_id;
-            $activeUsers = Cache::get($cacheKey, []);
-
-            if (isset($activeUsers[$user->user_id])) {
-                unset($activeUsers[$user->user_id]);
-                Cache::put($cacheKey, $activeUsers, self::CACHE_DURATION);
-            }
-
-            // Delete from DB using Eloquent
-            $user->delete();
-
-            // Track affected rooms
-            $affectedRooms[$user->room_id] = true;
-
-            // Broadcast leave event
-            broadcast(new UserActivity($user->room_id, $activeUsers, 'leave'));
-        }
-
-        // Check each affected room to see if it should be marked inactive
-        foreach (array_keys($affectedRooms) as $roomId) {
-            $remainingUsers = RoomUser::where('room_id', $roomId)->count();
-            if ($remainingUsers === 0) {
-                // Mark room as inactive using Eloquent
-                Room::where('room_id', $roomId)->update(['is_active' => false]);
-                broadcast(new RoomInactive($roomId));
-            }
+            // Optional: broadcast event ki room inactive ho gaya
+            broadcast(new RoomInactive($inactiveRoom->room_id));
         }
     }
 }

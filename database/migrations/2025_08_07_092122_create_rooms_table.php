@@ -19,6 +19,7 @@ return new class extends Migration {
             $table->boolean('is_public')->default(true);
             $table->boolean('read_only')->default(false);
             $table->boolean('is_active')->default(true);
+            $table->timestamp('expired_at');
             $table->timestamps();
             $table->softDeletes();
         });

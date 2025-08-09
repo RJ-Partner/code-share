@@ -14,6 +14,7 @@ class Room extends Model
         'is_public',
         'read_only',
         'is_active',
+        'expired_at',
         'code'
     ];
 

@@ -14,11 +14,9 @@ class RoomUser extends Model
         'ip',
         'user_agent',
         'is_admin',
-        'last_activity'
     ];
 
     protected $dates = [
-        'last_activity',
         'created_at',
         'updated_at',
         'deleted_at'

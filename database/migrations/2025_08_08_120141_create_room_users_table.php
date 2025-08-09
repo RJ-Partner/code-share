@@ -18,7 +18,6 @@ return new class extends Migration {
             $table->string('ip')->nullable();
             $table->string('user_agent')->nullable();
             $table->boolean('is_admin')->default(false);
-            $table->timestamp('last_activity');
             $table->timestamps();
             $table->softDeletes();
         });

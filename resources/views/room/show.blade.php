@@ -1,5 +1,30 @@
 @extends('layouts.app')
 @section('content')
+    <!-- Network Status Banner -->
+    <div id="network-status" class="fixed top-0 left-0 right-0 z-50 transition-all duration-300 transform -translate-y-full">
+        <div id="offline-banner" class="bg-red-600 text-white p-3 text-center shadow-lg">
+            <div class="container mx-auto flex items-center justify-center">
+                <i class="fas fa-exclamation-triangle mr-2"></i>
+                <span>You're offline. Some features may not work properly.</span>
+                <button id="retry-connection" class="ml-4 bg-red-700 hover:bg-red-800 px-3 py-1 rounded text-sm transition">
+                    <i class="fas fa-sync-alt mr-1"></i> Retry
+                </button>
+            </div>
+        </div>
+        <div id="reconnecting-banner" class="bg-yellow-600 text-white p-3 text-center shadow-lg hidden">
+            <div class="container mx-auto flex items-center justify-center">
+                <i class="fas fa-spinner fa-spin mr-2"></i>
+                <span>Reconnecting... <span id="retry-count"></span></span>
+            </div>
+        </div>
+        <div id="online-banner" class="bg-green-600 text-white p-3 text-center shadow-lg hidden">
+            <div class="container mx-auto flex items-center justify-center">
+                <i class="fas fa-check-circle mr-2"></i>
+                <span>You're back online!</span>
+            </div>
+        </div>
+    </div>
+
     <div id="editor-screen" class="flex flex-col h-screen">
         <!-- Header -->
         <header class="glass-effect p-4 flex justify-between items-center border-b border-slate-700 z-10">
@@ -28,26 +53,29 @@
             </div>
             <div class="flex items-center space-x-4">
                 <div class="flex items-center space-x-2">
-                    <div class="flex -space-x-2" id="active-users">
-                        @foreach ($activeUsers as $user)
-                            <div class="relative group">
-                                <div
-                                    class="w-8 h-8 rounded-full bg-{{ $user['isAdmin'] ? 'blue' : 'green' }}-500 flex items-center justify-center text-white text-xs font-bold border-2 border-gray-800">
-                                    {{ strtoupper(substr($user['display_id'], 0, 2)) }}
-                                </div>
-                                <div
-                                    class="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 whitespace-nowrap z-10">
-                                    <div class="font-semibold">{{ $user['isAdmin'] ? 'Admin' : 'Guest' }}</div>
-                                    <div>ID: {{ $user['display_id'] }}</div>
-                                    <div class="text-gray-400 text-xs">
-                                        {{ \Carbon\Carbon::createFromTimestamp($user['lastActivity'])->diffForHumans() }}
+                    @if ($isAdmin)
+                        <div class="flex -space-x-2" id="active-users">
+                            @foreach ($activeUsers as $user)
+                                <div class="relative group">
+                                    <div
+                                        class="w-8 h-8 rounded-full bg-{{ $user['isAdmin'] ? 'blue' : 'green' }}-500 flex items-center justify-center text-white text-xs font-bold border-2 border-gray-800">
+                                        {{ strtoupper(substr($user['display_id'], 0, 2)) }}
+                                    </div>
+                                    <div
+                                        class="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 whitespace-nowrap z-10">
+                                        <div class="font-semibold">{{ $user['isAdmin'] ? 'Admin' : 'Guest' }}</div>
+                                        <div>ID: {{ $user['display_id'] }}</div>
+                                        <div class="text-gray-400 text-xs">
+                                            {{ \Carbon\Carbon::createFromTimestamp($user['lastActivity'])->diffForHumans() }}
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        @endforeach
-                    </div>
+                            @endforeach
+                        </div>
+                    @endif
                     <span id="user-count" class="text-sm text-gray-400">{{ count($activeUsers) }}
-                        user{{ count($activeUsers) != 1 ? 's' : '' }}</span>
+                        user{{ count($activeUsers) != 1 ? 's' : '' }}
+                    </span>
                 </div>
                 @if ($isAdmin)
                     <button id="download-btn"
@@ -81,7 +109,7 @@
                     <span id="char-count">{{ strlen($room->code) }}</span> chars
                 </div>
                 <div class="flex items-center">
-                    <div class="w-3 h-3 rounded-full bg-green-500 mr-2 pulse-animation"></div>
+                    <div id="connection-status" class="w-3 h-3 rounded-full bg-green-500 mr-2 pulse-animation"></div>
                     <span>{{ $room->read_only && !$isAdmin ? 'Viewing' : 'Editing' }}</span>
                 </div>
             </div>
@@ -136,6 +164,7 @@
         </div>
     </div>
 @endsection
+
 @push('scripts')
     <script>
         window.ReverbConfig = {
@@ -146,6 +175,22 @@
         };
     </script>
     <script>
+        // Network status variables
+        let isOnline = navigator.onLine;
+        let retryCount = 0;
+        const maxRetries = 5;
+        let retryInterval;
+        let connectionCheckInterval;
+
+        // Network status elements
+        const networkStatus = document.getElementById('network-status');
+        const offlineBanner = document.getElementById('offline-banner');
+        const reconnectingBanner = document.getElementById('reconnecting-banner');
+        const onlineBanner = document.getElementById('online-banner');
+        const retryCountElement = document.getElementById('retry-count');
+        const connectionStatus = document.getElementById('connection-status');
+        const retryButton = document.getElementById('retry-connection');
+
         // Global variables
         let editor;
         let lastSentCode = "";
@@ -158,23 +203,167 @@
         const sessionDisplayId = '{{ $displayId }}';
         const currentRoomId = document.getElementById("room-id-display")?.textContent.trim() || '';
 
-        // Initialize the app
-        document.addEventListener("DOMContentLoaded", () => {
-            if (document.getElementById("code")) {
-                initEditor();
+        // Initialize network status
+        function initNetworkStatus() {
+            if (isOnline) {
+                hideAllBanners();
+            } else {
+                showOfflineBanner();
             }
 
-            // Set up visibility detection
-            // setupVisibilityDetection();
+            // Add event listeners
+            window.addEventListener('online', handleOnline);
+            window.addEventListener('offline', handleOffline);
 
-            // Set up activity detection
-            setupActivityDetection();
+            // Add retry button listener
+            if (retryButton) {
+                retryButton.addEventListener('click', () => {
+                    if (!isOnline) {
+                        attemptReconnect();
+                    }
+                });
+            }
 
+            // Start periodic connection check
+            connectionCheckInterval = setInterval(checkConnection, 30000);
+        }
+
+        // Handle online event
+        function handleOnline() {
+            isOnline = true;
+            clearInterval(retryInterval);
+            showOnlineBanner();
+            updateConnectionStatus(true);
+
+            // Reinitialize WebSocket connection
+            setTimeout(() => {
+                initializeWebSocket();
+                hideAllBanners();
+            }, 2000);
+        }
+
+        // Handle offline event
+        function handleOffline() {
+            isOnline = false;
+            showOfflineBanner();
+            updateConnectionStatus(false);
+        }
+
+        // Show offline banner
+        function showOfflineBanner() {
+            hideAllBanners();
+            networkStatus.classList.remove('-translate-y-full');
+            offlineBanner.classList.remove('hidden');
+        }
+
+        // Show reconnecting banner
+        function showReconnectingBanner() {
+            hideAllBanners();
+            networkStatus.classList.remove('-translate-y-full');
+            reconnectingBanner.classList.remove('hidden');
+            retryCountElement.textContent = `(${retryCount}/${maxRetries})`;
+        }
+
+        // Show online banner
+        function showOnlineBanner() {
+            hideAllBanners();
+            networkStatus.classList.remove('-translate-y-full');
+            onlineBanner.classList.remove('hidden');
+
+            // Hide after 3 seconds
+            setTimeout(() => {
+                hideAllBanners();
+            }, 3000);
+        }
+
+        // Hide all banners
+        function hideAllBanners() {
+            networkStatus.classList.add('-translate-y-full');
+            offlineBanner.classList.add('hidden');
+            reconnectingBanner.classList.add('hidden');
+            onlineBanner.classList.add('hidden');
+        }
+
+        // Update connection status indicator
+        function updateConnectionStatus(connected) {
+            if (connectionStatus) {
+                if (connected) {
+                    connectionStatus.classList.remove('bg-red-500', 'bg-yellow-500');
+                    connectionStatus.classList.add('bg-green-500');
+                } else {
+                    connectionStatus.classList.remove('bg-green-500');
+                    connectionStatus.classList.add('bg-red-500');
+                }
+            }
+        }
+
+        // Attempt to reconnect
+        function attemptReconnect() {
+            if (retryCount >= maxRetries) {
+                showNotification('Maximum reconnection attempts reached. Please refresh the page.', 'error');
+                return;
+            }
+
+            retryCount++;
+            showReconnectingBanner();
+
+            // Check connection with a simple fetch request
+            fetch('/ping', {
+                    method: 'HEAD',
+                    cache: 'no-cache',
+                    headers: {
+                        'Pragma': 'no-cache'
+                    }
+                })
+                .then(response => {
+                    if (response.ok) {
+                        isOnline = true;
+                        handleOnline();
+                    } else {
+                        throw new Error('Network response was not ok');
+                    }
+                })
+                .catch(error => {
+                    console.error('Reconnection failed:', error);
+                    // Schedule next retry
+                    retryInterval = setTimeout(attemptReconnect, 3000);
+                });
+        }
+
+        // Check connection periodically
+        function checkConnection() {
+            if (isOnline) {
+                fetch('/ping', {
+                        method: 'HEAD',
+                        cache: 'no-cache',
+                        headers: {
+                            'Pragma': 'no-cache'
+                        }
+                    })
+                    .catch(() => {
+                        // Connection lost
+                        isOnline = false;
+                        handleOffline();
+                    });
+            }
+        }
+
+        // Initialize WebSocket connection
+        function initializeWebSocket() {
             try {
                 if (!window.Echo) {
                     throw new Error("window.Echo is not defined. Make sure Laravel Echo is initialized.");
                 }
-                const currentRoomId = document.getElementById("room-id-display").textContent.trim();
+
+                // Disconnect existing connection if any
+                if (window.Echo.connector) {
+                    window.Echo.disconnect();
+                }
+
+                // Reconnect
+                window.Echo.connect();
+
+                const currentRoomId = document.getElementById("room-id-display")?.textContent.trim() || '';
                 window.Echo.channel(`room.${currentRoomId}`)
                     .listen('.code.updated', (e) => {
                         if (e.userId !== sessionUserId) {
@@ -207,14 +396,6 @@
                     .listen('.user.activity', (e) => {
                         updateActiveUsers(e.activeUsers);
                     })
-                    .error((error) => {
-                        console.error('WebSocket error:', error);
-                        showNotification('Connection lost. Please refresh.', 'error');
-                    });
-                console.log("✅ Echo successfully initialized for room:", currentRoomId);
-
-                // Add this after the existing Echo channel listeners
-                window.Echo.channel(`room.${currentRoomId}`)
                     .listen('.room.inactive', (e) => {
                         console.log('Room is now inactive');
                         // Show a notification
@@ -247,55 +428,38 @@
                         setTimeout(() => {
                             window.location.href = `/room/${currentRoomId}`;
                         }, 10000);
+                    })
+                    .error((error) => {
+                        console.error('WebSocket error:', error);
+                        if (isOnline) {
+                            showNotification('Connection lost. Trying to reconnect...', 'error');
+                            attemptReconnect();
+                        }
                     });
+
+                console.log("✅ Echo successfully initialized for room:", currentRoomId);
             } catch (error) {
                 console.error('❌ Echo initialization error:', error.message);
                 showNotification('❌ Failed to initialize real-time connection', 'error');
             }
-        });
-
-        // Set up visibility detection
-        // function setupVisibilityDetection() {
-        //     // Handle visibility change
-        //     document.addEventListener('visibilitychange', () => {
-        //         if (document.visibilityState === 'visible') {
-        //             // Tab became visible again, send heartbeat immediately
-        //             sendHeartbeat();
-        //             console.log('Tab became visible, heartbeat sent');
-        //         }
-        //     });
-
-        //     // Handle window focus
-        //     window.addEventListener('focus', () => {
-        //         sendHeartbeat();
-        //         console.log('Window focused, heartbeat sent');
-        //     });
-        // }
-
-        // Set up activity detection
-        function setupActivityDetection() {
-            // Track user activity
-            const activityEvents = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart', 'click'];
-
-            activityEvents.forEach(eventType => {
-                document.addEventListener(eventType, () => {
-                    lastActivityTime = Date.now();
-                }, true);
-            });
-
-            // Check for activity every minute
-            activityCheckInterval = setInterval(() => {
-                const timeSinceActivity = Date.now() - lastActivityTime;
-                // If there's been activity in the last 5 minutes, send a heartbeat
-                if (timeSinceActivity < 300000) { // 5 minutes
-                    sendHeartbeat();
-                }
-            }, 60000); // Check every minute
         }
+
+        // Initialize the app
+        document.addEventListener("DOMContentLoaded", () => {
+            // Initialize network status
+            initNetworkStatus();
+
+            if (document.getElementById("code")) {
+                initEditor();
+            }
+
+            initializeWebSocket();
+        });
 
         // Send heartbeat function
         function sendHeartbeat() {
-            if (!currentRoomId || !sessionUserId) return;
+            if (!currentRoomId || !sessionUserId || !isOnline) return;
+
             fetch(`/room/${currentRoomId}/heartbeat`, {
                     method: "POST",
                     headers: {
@@ -322,15 +486,15 @@
             // Clear intervals
             if (visibilityCheckInterval) clearInterval(visibilityCheckInterval);
             if (activityCheckInterval) clearInterval(activityCheckInterval);
+            if (connectionCheckInterval) clearInterval(connectionCheckInterval);
+            if (retryInterval) clearTimeout(retryInterval);
 
             // Send leave notification
             if (!currentRoomId || !sessionUserId) return;
-
             // Use sendBeacon for reliable delivery
             const data = new FormData();
             data.append('userId', sessionUserId);
             data.append('_token', document.querySelector('meta[name="csrf-token"]').content);
-
             // Send the beacon request
             navigator.sendBeacon(`/room/${currentRoomId}/leave`, data);
         });
@@ -364,6 +528,8 @@
 
             // Hybrid debounce + force send
             editor.on("keyup", () => {
+                if (!isOnline) return; // Don't send updates if offline
+
                 clearTimeout(codeUpdateTimer);
                 codeUpdateTimer = setTimeout(() => {
                     const codeContent = editor.getValue();
@@ -399,7 +565,8 @@
 
         // Broadcast code update to Laravel API
         function broadcastCodeUpdate(roomId, codeContent) {
-            if (!roomId) return;
+            if (!roomId || !isOnline) return;
+
             const formData = new FormData();
             formData.append('code', codeContent);
             formData.append('_token', document.querySelector('meta[name="csrf-token"]').content);
@@ -425,6 +592,8 @@
 
         // Add this to your JavaScript
         function checkRoomStatus() {
+            if (!isOnline) return;
+
             fetch(`/room/${currentRoomId}/status`)
                 .then(response => response.json())
                 .then(data => {
@@ -465,13 +634,11 @@
             Object.values(usersObj).forEach(user => {
                 const userElement = document.createElement('div');
                 userElement.className = 'relative group';
-
                 const avatarElement = document.createElement('div');
                 avatarElement.className =
                     `w-8 h-8 rounded-full bg-${user.isAdmin ? 'blue' : 'green'}-500 flex items-center justify-center text-white text-xs font-bold border-2 border-gray-800`;
                 avatarElement.textContent = user.display_id ? user.display_id.substring(0, 2).toUpperCase() : (user
                     .isAdmin ? 'A' : 'G');
-
                 const tooltipElement = document.createElement('div');
                 tooltipElement.className =
                     'absolute top-full left-1/2 transform -translate-x-1/2 mt-2 hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 whitespace-nowrap z-10';
@@ -482,7 +649,6 @@
             ${user.lastActivity ? new Date(user.lastActivity * 1000).toLocaleTimeString() : 'Unknown time'}
         </div>
     `;
-
                 userElement.appendChild(avatarElement);
                 userElement.appendChild(tooltipElement);
                 activeUsersContainer.appendChild(userElement);
@@ -540,7 +706,6 @@
             const shareModal = document.getElementById("share-modal");
             if (!shareModal) return;
             shareModal.classList.remove("hidden");
-
             // Generate QR code
             const qrcodeContainer = document.getElementById("qrcode-container");
             if (qrcodeContainer) {

@@ -1,5 +1,4 @@
 @extends('layouts.app')
-
 @section('content')
     <div id="editor-screen" class="flex flex-col h-screen">
         <!-- Header -->
@@ -13,17 +12,17 @@
                     <h1 class="text-xl font-semibold flex items-center">
                         <i class="fas fa-code mr-2 text-blue-400"></i>
                         DevSync
+                        @if ($isAdmin)
+                            <span class="ml-2 text-xs bg-blue-600 text-blue-100 px-2 py-1 rounded">ADMIN</span>
+                        @endif
                     </h1>
                     <div class="flex items-center text-sm text-gray-400 mt-1">
-                        <span class="terminal-prompt mr-2">room:</span>
+                        <span class="terminal-prompt mr-2">Room ID:</span>
                         <span id="room-id-display" class="terminal-text font-mono">{{ $room->room_id }}</span>
                         <button id="copy-room-btn"
                             class="ml-2 text-gray-400 hover:text-white p-1 rounded hover:bg-slate-800 transition">
                             <i class="fas fa-copy"></i>
                         </button>
-                        @if ($isAdmin)
-                            <span class="ml-2 text-xs bg-blue-600 text-blue-100 px-2 py-1 rounded">ADMIN</span>
-                        @endif
                     </div>
                 </div>
             </div>
@@ -34,12 +33,12 @@
                             <div class="relative group">
                                 <div
                                     class="w-8 h-8 rounded-full bg-{{ $user['isAdmin'] ? 'blue' : 'green' }}-500 flex items-center justify-center text-white text-xs font-bold border-2 border-gray-800">
-                                    {{ $user['isAdmin'] ? 'A' : 'G' }}
+                                    {{ strtoupper(substr($user['display_id'], 0, 2)) }}
                                 </div>
                                 <div
                                     class="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 whitespace-nowrap z-10">
                                     <div class="font-semibold">{{ $user['isAdmin'] ? 'Admin' : 'Guest' }}</div>
-                                    <div>{{ $user['ip'] }}</div>
+                                    <div>ID: {{ $user['display_id'] }}</div>
                                     <div class="text-gray-400 text-xs">
                                         {{ \Carbon\Carbon::createFromTimestamp($user['lastActivity'])->diffForHumans() }}
                                     </div>
@@ -62,7 +61,6 @@
                 </button>
             </div>
         </header>
-
         <!-- Main Content -->
         <div class="flex-1 overflow-hidden">
             <main class="h-full p-4">
@@ -71,7 +69,6 @@
                 </div>
             </main>
         </div>
-
         <!-- Footer -->
         <footer class="glass-effect p-4 flex justify-between items-center border-t border-slate-700 z-10">
             <div class="flex items-center space-x-4 text-sm text-gray-400">
@@ -88,9 +85,17 @@
                     <span>{{ $room->read_only && !$isAdmin ? 'Viewing' : 'Editing' }}</span>
                 </div>
             </div>
+            <div class="flex items-center space-x-4 text-sm text-gray-400">
+                <div class="flex items-center">
+                    <!-- User icon with pulse animation instead of green dot -->
+                    <div class="relative mr-2">
+                        <i class="fas fa-user text-green-500 pulse-animation"></i>
+                    </div>
+                    <span>{{ $displayId }}</span>
+                </div>
+            </div>
         </footer>
     </div>
-
     <!-- Share Modal -->
     <div id="share-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
         <div class="glass-effect rounded-xl p-6 max-w-md w-full mx-4 border border-slate-700">
@@ -140,21 +145,36 @@
             scheme: "{{ env('VITE_REVERB_SCHEME', 'http') }}"
         };
     </script>
-
     <script>
+        // Global variables
+        let editor;
+        let lastSentCode = "";
+        let typingTimer;
+        let codeUpdateTimer;
+        let lastActivityTime = Date.now();
+        let visibilityCheckInterval;
+        let activityCheckInterval;
+        const sessionUserId = '{{ $userId }}';
+        const sessionDisplayId = '{{ $displayId }}';
+        const currentRoomId = document.getElementById("room-id-display")?.textContent.trim() || '';
+
         // Initialize the app
         document.addEventListener("DOMContentLoaded", () => {
             if (document.getElementById("code")) {
                 initEditor();
             }
 
+            // Set up visibility detection
+            // setupVisibilityDetection();
+
+            // Set up activity detection
+            setupActivityDetection();
+
             try {
                 if (!window.Echo) {
                     throw new Error("window.Echo is not defined. Make sure Laravel Echo is initialized.");
                 }
-
                 const currentRoomId = document.getElementById("room-id-display").textContent.trim();
-
                 window.Echo.channel(`room.${currentRoomId}`)
                     .listen('.code.updated', (e) => {
                         if (e.userId !== sessionUserId) {
@@ -162,7 +182,6 @@
                                 "%c🔄 Code update detected from another user",
                                 "color: #3498db; font-weight: bold;"
                             );
-
                             // Fetch the latest code from the server
                             fetch(`/room/${currentRoomId}/code-fetch`)
                                 .then(response => response.json())
@@ -171,21 +190,16 @@
                                         console.error(data.error);
                                         return;
                                     }
-
                                     // Save cursor position
                                     const cursor = editor.getCursor();
-
                                     // Update editor content
                                     editor.setValue(data.code || '');
-
                                     // Restore cursor position
                                     editor.setCursor(cursor);
-
                                     console.log(
                                         "%c✅ Code updated successfully",
                                         "color: #2ecc71; font-weight: bold;"
                                     );
-
                                 })
                                 .catch(error => console.error('Error fetching code:', error));
                         }
@@ -197,22 +211,18 @@
                         console.error('WebSocket error:', error);
                         showNotification('Connection lost. Please refresh.', 'error');
                     });
-
                 console.log("✅ Echo successfully initialized for room:", currentRoomId);
 
                 // Add this after the existing Echo channel listeners
                 window.Echo.channel(`room.${currentRoomId}`)
                     .listen('.room.inactive', (e) => {
                         console.log('Room is now inactive');
-
                         // Show a notification
                         showNotification('This room is now inactive. Redirecting...', 'warning');
-
                         // Disable the editor
                         if (editor) {
                             editor.setOption('readOnly', true);
                         }
-
                         // Show an overlay
                         const overlay = document.createElement('div');
                         overlay.className =
@@ -233,25 +243,106 @@
                                 </div>
                             `;
                         document.body.appendChild(overlay);
-
                         // Redirect after 10 seconds if user doesn't take action
                         setTimeout(() => {
                             window.location.href = `/room/${currentRoomId}`;
                         }, 10000);
                     });
-
             } catch (error) {
                 console.error('❌ Echo initialization error:', error.message);
                 showNotification('❌ Failed to initialize real-time connection', 'error');
             }
-
         });
+
+        // Set up visibility detection
+        // function setupVisibilityDetection() {
+        //     // Handle visibility change
+        //     document.addEventListener('visibilitychange', () => {
+        //         if (document.visibilityState === 'visible') {
+        //             // Tab became visible again, send heartbeat immediately
+        //             sendHeartbeat();
+        //             console.log('Tab became visible, heartbeat sent');
+        //         }
+        //     });
+
+        //     // Handle window focus
+        //     window.addEventListener('focus', () => {
+        //         sendHeartbeat();
+        //         console.log('Window focused, heartbeat sent');
+        //     });
+        // }
+
+        // Set up activity detection
+        function setupActivityDetection() {
+            // Track user activity
+            const activityEvents = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart', 'click'];
+
+            activityEvents.forEach(eventType => {
+                document.addEventListener(eventType, () => {
+                    lastActivityTime = Date.now();
+                }, true);
+            });
+
+            // Check for activity every minute
+            activityCheckInterval = setInterval(() => {
+                const timeSinceActivity = Date.now() - lastActivityTime;
+                // If there's been activity in the last 5 minutes, send a heartbeat
+                if (timeSinceActivity < 300000) { // 5 minutes
+                    sendHeartbeat();
+                }
+            }, 60000); // Check every minute
+        }
+
+        // Send heartbeat function
+        function sendHeartbeat() {
+            if (!currentRoomId || !sessionUserId) return;
+            fetch(`/room/${currentRoomId}/heartbeat`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]').content,
+                    },
+                    body: JSON.stringify({
+                        userId: sessionUserId
+                    }),
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.activeUsers) {
+                        updateActiveUsers(data.activeUsers);
+                    }
+                })
+                .catch(error => {
+                    console.error('Heartbeat error:', error);
+                });
+        }
+
+        // Handle browser/tab close
+        window.addEventListener('beforeunload', () => {
+            // Clear intervals
+            if (visibilityCheckInterval) clearInterval(visibilityCheckInterval);
+            if (activityCheckInterval) clearInterval(activityCheckInterval);
+
+            // Send leave notification
+            if (!currentRoomId || !sessionUserId) return;
+
+            // Use sendBeacon for reliable delivery
+            const data = new FormData();
+            data.append('userId', sessionUserId);
+            data.append('_token', document.querySelector('meta[name="csrf-token"]').content);
+
+            // Send the beacon request
+            navigator.sendBeacon(`/room/${currentRoomId}/leave`, data);
+        });
+
+        // Keep the existing heartbeat interval as a fallback
+        setInterval(sendHeartbeat, 20000);
 
         // Initialize CodeMirror
         function initEditor() {
             editor = CodeMirror.fromTextArea(document.getElementById("code"), {
                 lineNumbers: true,
-                mode: "htmlmixed",
+                mode: "phpmixed",
                 theme: "dracula",
                 readOnly: {{ $room->read_only && !($isAdmin ?? false) ? 'true' : 'false' }},
                 autoCloseBrackets: true,
@@ -263,13 +354,15 @@
                 },
             });
 
+            let lastForcedSend = Date.now();
+
             // Update stats with debounce
             editor.on("keyup", () => {
                 clearTimeout(typingTimer);
                 typingTimer = setTimeout(updateStats, 300);
             });
 
-            // Update code with debounce
+            // Hybrid debounce + force send
             editor.on("keyup", () => {
                 clearTimeout(codeUpdateTimer);
                 codeUpdateTimer = setTimeout(() => {
@@ -277,25 +370,28 @@
                     if (codeContent !== lastSentCode) {
                         lastSentCode = codeContent;
                         broadcastCodeUpdate(currentRoomId, codeContent);
+                        lastForcedSend = Date.now();
                     }
                 }, 500);
+
+                // Force send if 2s passed without sending
+                const now = Date.now();
+                if (now - lastForcedSend >= 2000) {
+                    const codeContent = editor.getValue();
+                    if (codeContent !== lastSentCode) {
+                        lastSentCode = codeContent;
+                        broadcastCodeUpdate(currentRoomId, codeContent);
+                    }
+                    lastForcedSend = now;
+                }
             });
+
             updateStats();
-
         }
-
-        // Global variables
-        let editor;
-        let lastSentCode = "";
-        let typingTimer;
-        let codeUpdateTimer;
-        const sessionUserId = '{{ $userId }}';
-        const currentRoomId = document.getElementById("room-id-display")?.textContent.trim() || '';
 
         // Update line and character count
         function updateStats() {
             if (!editor) return;
-
             const code = editor.getValue();
             document.getElementById("line-count").textContent = code.split("\n").length;
             document.getElementById("char-count").textContent = code.length;
@@ -304,7 +400,6 @@
         // Broadcast code update to Laravel API
         function broadcastCodeUpdate(roomId, codeContent) {
             if (!roomId) return;
-
             const formData = new FormData();
             formData.append('code', codeContent);
             formData.append('_token', document.querySelector('meta[name="csrf-token"]').content);
@@ -355,7 +450,6 @@
         function updateActiveUsers(users) {
             const activeUsersContainer = document.getElementById('active-users');
             const userCountElement = document.getElementById('user-count');
-
             if (!activeUsersContainer || !userCountElement) return;
 
             // Clear current users
@@ -375,14 +469,15 @@
                 const avatarElement = document.createElement('div');
                 avatarElement.className =
                     `w-8 h-8 rounded-full bg-${user.isAdmin ? 'blue' : 'green'}-500 flex items-center justify-center text-white text-xs font-bold border-2 border-gray-800`;
-                avatarElement.textContent = user.isAdmin ? 'A' : 'G';
+                avatarElement.textContent = user.display_id ? user.display_id.substring(0, 2).toUpperCase() : (user
+                    .isAdmin ? 'A' : 'G');
 
                 const tooltipElement = document.createElement('div');
                 tooltipElement.className =
                     'absolute top-full left-1/2 transform -translate-x-1/2 mt-2 hidden group-hover:block bg-gray-800 text-white text-xs rounded py-1 px-2 whitespace-nowrap z-10';
                 tooltipElement.innerHTML = `
         <div class="font-semibold">${user.isAdmin ? 'Admin' : 'Guest'}</div>
-        <div>${user.ip || 'Unknown IP'}</div>
+        <div>ID: ${user.display_id || 'Unknown'}</div>
         <div class="text-gray-400 text-xs">
             ${user.lastActivity ? new Date(user.lastActivity * 1000).toLocaleTimeString() : 'Unknown time'}
         </div>
@@ -394,62 +489,19 @@
             });
         }
 
-        // Send heartbeat to keep user active
-        // each 20 second
-        setInterval(() => {
-            if (!currentRoomId || !sessionUserId) return;
-
-            fetch(`/room/${currentRoomId}/heartbeat`, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "X-CSRF-TOKEN": document.querySelector('meta[name="csrf-token"]').content,
-                    },
-                    body: JSON.stringify({
-                        userId: sessionUserId
-                    }),
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.activeUsers) {
-                        updateActiveUsers(data.activeUsers);
-                    }
-                })
-                .catch(error => {
-                    console.error('Heartbeat error:', error);
-                });
-        }, 20000);
-
-        // Clean up when user leaves the page
-        window.addEventListener('beforeunload', () => {
-            if (!currentRoomId || !sessionUserId) return;
-
-            // Use sendBeacon for reliable delivery
-            const data = new FormData();
-            data.append('userId', sessionUserId);
-            data.append('_token', document.querySelector('meta[name="csrf-token"]').content);
-
-            navigator.sendBeacon(`/room/${currentRoomId}/leave`, data);
-        });
-
         // Show notification
         function showNotification(message, type = "success") {
             const notification = document.createElement("div");
             const bgColor = type === "success" ? "bg-green-600" :
                 type === "error" ? "bg-red-600" : "bg-blue-600";
-
             notification.className = `fixed top-4 right-4 p-4 mb-2 rounded-lg flex items-center z-50 ${bgColor}`;
-
             const icon = type === "success" ? "check-circle" :
                 type === "error" ? "exclamation-circle" : "info-circle";
-
             notification.innerHTML = `
                 <i class="fas fa-${icon} mr-2"></i>
                 <span>${message}</span>
             `;
-
             document.body.appendChild(notification);
-
             setTimeout(() => {
                 notification.style.opacity = '0';
                 notification.style.transition = 'opacity 0.5s ease';
@@ -468,7 +520,6 @@
         // Download code
         function downloadCode() {
             if (!editor) return;
-
             const code = editor.getValue();
             const blob = new Blob([code], {
                 type: "text/plain"
@@ -488,7 +539,6 @@
         function showShareModal() {
             const shareModal = document.getElementById("share-modal");
             if (!shareModal) return;
-
             shareModal.classList.remove("hidden");
 
             // Generate QR code
@@ -510,7 +560,6 @@
         function copyShareLink() {
             const shareLink = document.getElementById("share-link");
             if (!shareLink) return;
-
             shareLink.select();
             document.execCommand("copy");
             showNotification("Link copied to clipboard!");

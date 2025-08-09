@@ -13,6 +13,7 @@ return new class extends Migration {
         Schema::create('room_users', function (Blueprint $table) {
             $table->id();
             $table->string('room_id');
+            $table->string('display_id');
             $table->string('user_id');
             $table->string('ip')->nullable();
             $table->string('user_agent')->nullable();
